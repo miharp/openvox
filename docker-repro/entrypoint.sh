@@ -17,7 +17,7 @@ bundle install >/tmp/bundle-install.log 2>&1 || (tail -n 60 /tmp/bundle-install.
 
 mkdir -p /opt/puppetlabs/puppet /opt/puppetlabs/facter
 
-PUPPET="bundle exec puppet apply --detailed-exitcodes --confdir=/tmp/puppet-conf --vardir=/tmp/puppet-var --logdir=/tmp/puppet-log --codedir=/tmp/puppet-code --publicdir=/opt/puppetlabs/puppet/public /test/manifest.pp"
+PUPPET="bundle exec puppet apply --detailed-exitcodes --confdir=/tmp/puppet-conf --vardir=/tmp/puppet-var --logdir=/tmp/puppet-log --codedir=/tmp/puppet-code --publicdir=/opt/puppetlabs/puppet/public"
 
 echo "=== Starting test HTTP server (127.0.0.1:8000) ==="
 ruby /test/server.rb &
@@ -28,6 +28,8 @@ sleep 1
 # 0 = no changes, 2 = changes applied, 4 = failures, 6 = changes + failures.
 run_scenario() {
   local desc="$1" mode="$2" body="$3" expect_notify="$4" expect_exit="$5"
+  # Optional: alternate manifest, and an ERE the puppet output must match.
+  local manifest="${6:-/test/manifest.pp}" expect_output="${7:-}"
   echo "$mode" > /tmp/server_mode
   echo "$body" > /tmp/server_body
 
@@ -44,10 +46,10 @@ run_scenario() {
   echo "    (server mode: $mode, body: $body, expect notify fired: $expect_notify, expect exit: $expect_exit)"
   echo "=================================================================="
   set +e
-  OUTPUT=$($PUPPET 2>&1)
+  OUTPUT=$($PUPPET "$manifest" 2>&1)
   CODE=$?
   set -e
-  echo "$OUTPUT" | grep -E "Compiled catalog|content changed|defined content|Triggered|Applied catalog|Error" || true
+  echo "$OUTPUT" | grep -E "Compiled catalog|content changed|defined content|Triggered|Applied catalog|Error|Warning" || true
   echo "exit code: $CODE"
 
   if echo "$OUTPUT" | grep -q "Triggered 'refresh'"; then
@@ -56,10 +58,15 @@ run_scenario() {
     FIRED="no"
   fi
 
-  if [ "$FIRED" = "$expect_notify" ] && [ "$CODE" = "$expect_exit" ]; then
+  MISSING=""
+  if [ -n "$expect_output" ] && ! echo "$OUTPUT" | grep -qE "$expect_output"; then
+    MISSING=" *** and expected output matching /$expect_output/ was not found"
+  fi
+
+  if [ "$FIRED" = "$expect_notify" ] && [ "$CODE" = "$expect_exit" ] && [ -z "$MISSING" ]; then
     echo "RESULT: as expected (notify fired: $FIRED, exit: $CODE)"
   else
-    echo "RESULT: *** UNEXPECTED *** (notify fired: $FIRED, expected: $expect_notify; exit: $CODE, expected: $expect_exit)"
+    echo "RESULT: *** UNEXPECTED *** (notify fired: $FIRED, expected: $expect_notify; exit: $CODE, expected: $expect_exit)$MISSING"
   fi
 }
 
@@ -72,6 +79,8 @@ run_scenario "4. Re-apply: same content, ETag present but unused (no checksum =>
 run_scenario "5. Re-apply: same content, but Last-Modified churns every request -- KNOWN, UNFIXED gap (header exists, so we never earn a real hash)" last_modified_churn v2 yes 2
 run_scenario "6. Re-apply: same content, real sha256 header present -- sanity check, unaffected by this change" sha256 v2 no 0
 run_scenario "7. Re-apply: HEAD succeeds with no validators, but the GET fails -- the run must FAIL, never silently report a clean no-change run" get_fails v2 no 4
+
+run_scenario "8. Re-apply: checksum => mtime, still no headers -- explicit opt-out of verification: treated as unchanged, but must WARN that changes can never be detected" none v2 no 0 /test/manifest_mtime.pp "Warning: .*checksum => mtime the file will never be detected as changed"
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true

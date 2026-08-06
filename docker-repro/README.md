@@ -43,12 +43,14 @@ minutes); subsequent runs with the same cache volume are fast.
 ## What it does
 
 A single container runs both the test HTTP server (`server.rb`, plain
-`TCPServer`, no framework) and seven `puppet apply --detailed-exitcodes`
-runs against `manifest.pp`, flipping the server's response headers/body
-between each run via two files the server re-reads on every request
-(`/tmp/server_mode`, `/tmp/server_body`). Each scenario asserts both
+`TCPServer`, no framework) and eight `puppet apply --detailed-exitcodes`
+runs against `manifest.pp` (scenario 8 uses `manifest_mtime.pp`, identical
+except for an explicit `checksum => mtime`), flipping the server's response
+headers/body between each run via two files the server re-reads on every
+request (`/tmp/server_mode`, `/tmp/server_body`). Each scenario asserts
 whether `notify` fired and the exact exit code
-(0 = no changes, 2 = changes, 4 = failures).
+(0 = no changes, 2 = changes, 4 = failures); scenario 8 additionally
+asserts that a specific warning appears in the output.
 
 | # | Scenario | Expected on the fix branch | Expected on `main` (pre-fix) |
 |---|---|---|---|
@@ -59,6 +61,7 @@ whether `notify` fired and the exact exit code
 | 5 | Re-apply, same content, but `Last-Modified` churns every request | still spuriously fires (exit 2) — documented, unfixed gap | same |
 | 6 | Re-apply, same content, real `X-Checksum-Sha256` header present | no rewrite (exit 0) | same |
 | 7 | Re-apply, HEAD succeeds with no validators but the GET fails (500) | run **fails** (exit 4), no notify — "could not verify" is never silently "unchanged" | also fails (exit 4), via a different path: the fabricated mtime forces a content fetch, which then hits the 500 |
+| 8 | Re-apply, same content, still no headers, but the resource opts out with `checksum => mtime` | treated as unchanged (exit 0), **with a warning** that a file from this source can never be detected as changed | rewrite + notify fires every run (exit 2), no warning |
 
 Scenario 2 is the exact shape of `puppetlabs/puppet#9553`, verified against
 headers matching the real `https://packages.adoptium.net/artifactory/...`
@@ -72,7 +75,13 @@ overclaim — a server whose `Last-Modified` itself lies is a different,
 still-open problem, not something this change touches. Scenario 7 guards
 the failure-propagation property of the fix: the fix's verification GET
 must not swallow a failure and report a clean run — both branches must
-fail loudly here, just via different code paths.
+fail loudly here, just via different code paths. Scenario 8 covers the
+explicit `mtime`/`ctime` opt-out: with no time header from the server there
+is nothing to compare against, so the fix treats the file as unchanged
+forever — a silent-staleness trade-off the fix deliberately announces with
+a warning on every run rather than degrading quietly (an explicit
+`checksum => none` stays quiet, since "don't verify" is exactly what was
+asked for).
 
 The script checks for `Triggered 'refresh'` in the `puppet apply` output as
 the signal that `notify` fired (the `exec`'s own `NOTIFY_FIRED` stdout isn't
