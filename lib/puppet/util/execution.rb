@@ -231,7 +231,11 @@ module Puppet::Util::Execution
               nil
             end
           }
-          if options[:squelch]
+          if child_pid.nil?
+            # The command could not be started (already logged). Report it the
+            # way the forked child did with its exit!(1): status 1, no output.
+            exit_status = 1
+          elsif options[:squelch]
             exit_status = Process.waitpid2(child_pid).last.exitstatus
           else
             # Use non-blocking read to check for data. After each attempt,
@@ -350,7 +354,65 @@ module Puppet::Util::Execution
   # @comment see call to private_class_method after method definition
   # @api private
   #
+  # Start a command on POSIX systems and return its pid.
+  #
+  # The command is started with Process.spawn rather than Kernel#fork + exec.
+  # Ruby 3.4+ makes Kernel#fork wait, with the GVL held, for every in-flight
+  # native getaddrinfo(3) thread (the fork read-write lock in ext/socket), and
+  # a Puppet::HTTP connect that hit http_connect_timeout leaves such threads
+  # behind until the resolver gives up. A fork in that state freezes the whole
+  # process: no Timeout, no signal handling, only SIGKILL gets through.
+  # Process.spawn does not take that lock. See
+  # https://github.com/OpenVoxProject/openvox/issues/485.
+  #
+  # Running as a different user or group still goes through fork + exec:
+  # Process.spawn's uid/gid options do not initialize supplementary groups,
+  # which Puppet::Util::SUIDManager.change_privileges does via initgroups.
+  #
+  # @return [Integer, nil] the child's pid, or nil when the command could not
+  #   be started; the failure is logged, as the forked child does before its
+  #   exit!(1).
   def self.execute_posix(command, options, stdin, stdout, stderr)
+    return execute_posix_forked(command, options, stdin, stdout, stderr) if options[:uid] || options[:gid]
+
+    # See execute_posix_forked for why Array(command) is not used here.
+    command = [command].flatten
+
+    env = {}
+    if options[:override_locale]
+      # Clear the locale variables and force a consistent, predictable locale.
+      Puppet::Util::POSIX::LOCALE_ENV_VARS.each { |name| env[name] = nil }
+      env['LANG'] = 'C'
+      env['LC_ALL'] = 'C'
+    end
+    # Unset the user-related variables so that different ways of starting
+    # puppet (boot, service, init script, ...) do not leak into commands.
+    Puppet::Util::POSIX::USER_ENV_VARS.each { |name| env[name] = nil }
+    env.merge!((options[:custom_environment] || {}).transform_keys(&:to_s))
+
+    spawn_options = {
+      :in => stdin,
+      :out => stdout,
+      :err => stderr,
+      # Detach from puppet's process group, as the forked path did with setsid.
+      :pgroup => true,
+      # Only the three standard streams reach the command, as in the forked
+      # path, which closed every other descriptor before exec.
+      :close_others => true,
+    }
+    cwd = options[:cwd]
+    spawn_options[:chdir] = cwd if cwd
+
+    Process.spawn(env, *command, spawn_options)
+  rescue SystemCallError => detail
+    Puppet.log_exception(detail, _("Could not execute posix command: %{detail}") % { detail: detail })
+    nil
+  end
+
+  # Start a command with Kernel#fork + exec, changing user and/or group in the
+  # child first. Only used when options[:uid] or options[:gid] is set; see
+  # execute_posix.
+  def self.execute_posix_forked(command, options, stdin, stdout, stderr)
     Puppet::Util.safe_posix_fork(stdin, stdout, stderr) do
       # We can't just call Array(command), and rely on it returning
       # things like ['foo'], when passed ['foo'], because
@@ -397,6 +459,7 @@ module Puppet::Util::Execution
     end
   end
   private_class_method :execute_posix
+  private_class_method :execute_posix_forked
 
   # This is private method.
   # @comment see call to private_class_method after method definition

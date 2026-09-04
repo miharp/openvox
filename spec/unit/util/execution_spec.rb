@@ -37,6 +37,7 @@ describe Puppet::Util::Execution, if: !Puppet::Util::Platform.jruby? do
     describe "#execute_posix (stubs)", :unless => Puppet::Util::Platform.windows? do
       before :each do
         # Most of the things this method does are bad to do during specs. :/
+        allow(Process).to receive(:spawn).and_return(pid)
         allow(Kernel).to receive(:fork).and_return(pid).and_yield
         allow(Process).to receive(:setsid)
         allow(Kernel).to receive(:exec)
@@ -79,60 +80,77 @@ describe Puppet::Util::Execution, if: !Puppet::Util::Platform.jruby? do
 
       end
 
-
-      it "should fork a child process to execute the command" do
-        expect(Kernel).to receive(:fork).and_return(pid).and_yield
-        expect(Kernel).to receive(:exec).with('test command')
-
-        call_exec_posix('test command', {}, @stdin, @stdout, @stderr)
-      end
-
-      it "should start a new session group" do
-        expect(Process).to receive(:setsid)
+      it "starts the command with Process.spawn instead of fork + exec" do
+        expect(Kernel).not_to receive(:fork)
+        expect(Kernel).not_to receive(:exec)
+        expect(Process).to receive(:spawn).with(kind_of(Hash), 'test command',
+          hash_including(:in => @stdin, :out => @stdout, :err => @stderr, :close_others => true)).and_return(pid)
 
         call_exec_posix('test command', {}, @stdin, @stdout, @stderr)
       end
 
-      it "should permanently change to the correct user and group if specified" do
-        expect(Puppet::Util::SUIDManager).to receive(:change_group).with(55, true)
-        expect(Puppet::Util::SUIDManager).to receive(:change_user).with(50, true)
-
-        call_exec_posix('test command', {:uid => 50, :gid => 55}, @stdin, @stdout, @stderr)
-      end
-
-      it "should exit failure if there is a problem execing the command" do
-        expect(Kernel).to receive(:exec).with('test command').and_raise("failed to execute!")
-        allow(Puppet::Util::Execution).to receive(:puts)
-        expect(Puppet::Util::Execution).to receive(:exit!).with(1)
+      it "starts the command in its own process group" do
+        expect(Process).to receive(:spawn).with(kind_of(Hash), 'test command', hash_including(:pgroup => true)).and_return(pid)
 
         call_exec_posix('test command', {}, @stdin, @stdout, @stderr)
+      end
+
+      it "logs and returns nil if the command cannot be started" do
+        expect(Process).to receive(:spawn).and_raise(Errno::ENOENT, 'test command')
+        expect(Puppet).to receive(:log_exception).with(kind_of(Errno::ENOENT), /Could not execute posix command/)
+
+        expect(call_exec_posix('test command', {}, @stdin, @stdout, @stderr)).to be_nil
       end
 
       it "should properly execute commands specified as arrays" do
-        expect(Kernel).to receive(:exec).with('test command', 'with', 'arguments')
+        expect(Process).to receive(:spawn).with(kind_of(Hash), 'test command', 'with', 'arguments', kind_of(Hash)).and_return(pid)
 
-        call_exec_posix(['test command', 'with', 'arguments'], {:uid => 50, :gid => 55}, @stdin, @stdout, @stderr)
+        call_exec_posix(['test command', 'with', 'arguments'], {}, @stdin, @stdout, @stderr)
       end
 
       it "should properly execute string commands with embedded newlines" do
-        expect(Kernel).to receive(:exec).with("/bin/echo 'foo' ; \n /bin/echo 'bar' ;")
+        expect(Process).to receive(:spawn).with(kind_of(Hash), "/bin/echo 'foo' ; \n /bin/echo 'bar' ;", kind_of(Hash)).and_return(pid)
 
-        call_exec_posix("/bin/echo 'foo' ; \n /bin/echo 'bar' ;", {:uid => 50, :gid => 55}, @stdin, @stdout, @stderr)
+        call_exec_posix("/bin/echo 'foo' ; \n /bin/echo 'bar' ;", {}, @stdin, @stdout, @stderr)
+      end
+
+      context 'environment' do
+        it "forces the C locale by default" do
+          expect(Process).to receive(:spawn).with(hash_including('LANG' => 'C', 'LC_ALL' => 'C', 'LC_MESSAGES' => nil), 'test command', kind_of(Hash)).and_return(pid)
+
+          call_exec_posix('test command', { :override_locale => true }, @stdin, @stdout, @stderr)
+        end
+
+        it "leaves the locale alone when override_locale is false" do
+          expect(Process).to receive(:spawn).with(hash_excluding('LANG', 'LC_ALL', 'LC_MESSAGES'), 'test command', kind_of(Hash)).and_return(pid)
+
+          call_exec_posix('test command', { :override_locale => false }, @stdin, @stdout, @stderr)
+        end
+
+        it "unsets the user-related environment variables" do
+          expect(Process).to receive(:spawn).with(hash_including('HOME' => nil, 'USER' => nil, 'LOGNAME' => nil), 'test command', kind_of(Hash)).and_return(pid)
+
+          call_exec_posix('test command', {}, @stdin, @stdout, @stderr)
+        end
+
+        it "applies the custom environment last, with stringified keys" do
+          expect(Process).to receive(:spawn).with(hash_including('FOO' => 'bar', 'LANG' => 'en_US.UTF-8', 'HOME' => '/tmp'), 'test command', kind_of(Hash)).and_return(pid)
+
+          call_exec_posix('test command', { :custom_environment => { :FOO => 'bar', 'LANG' => 'en_US.UTF-8', 'HOME' => '/tmp' } }, @stdin, @stdout, @stderr)
+        end
       end
 
       context 'cwd option' do
         let(:cwd) { 'cwd' }
 
         it 'should run the command in the specified working directory' do
-          expect(Dir).to receive(:chdir).with(cwd)
-          expect(Kernel).to receive(:exec).with('test command')
+          expect(Process).to receive(:spawn).with(kind_of(Hash), 'test command', hash_including(:chdir => cwd)).and_return(pid)
 
           call_exec_posix('test command', { :cwd => cwd }, @stdin, @stdout, @stderr)
         end
 
         it "should not change the current working directory if cwd is unspecified" do
-          expect(Dir).to receive(:chdir).never
-          expect(Kernel).to receive(:exec).with('test command')
+          expect(Process).to receive(:spawn).with(kind_of(Hash), 'test command', hash_excluding(:chdir)).and_return(pid)
 
           call_exec_posix('test command', {}, @stdin, @stdout, @stderr)
         end
@@ -140,6 +158,60 @@ describe Puppet::Util::Execution, if: !Puppet::Util::Platform.jruby? do
 
       it "should return the pid of the child process" do
         expect(call_exec_posix('test command', {}, @stdin, @stdout, @stderr)).to eq(pid)
+      end
+
+      context "when changing user or group" do
+        it "should fork a child process to execute the command" do
+          expect(Process).not_to receive(:spawn)
+          expect(Kernel).to receive(:fork).and_return(pid).and_yield
+          expect(Kernel).to receive(:exec).with('test command')
+
+          call_exec_posix('test command', {:uid => 50, :gid => 55}, @stdin, @stdout, @stderr)
+        end
+
+        it "should start a new session group" do
+          expect(Process).to receive(:setsid)
+
+          call_exec_posix('test command', {:gid => 55}, @stdin, @stdout, @stderr)
+        end
+
+        it "should permanently change to the correct user and group if specified" do
+          expect(Puppet::Util::SUIDManager).to receive(:change_group).with(55, true)
+          expect(Puppet::Util::SUIDManager).to receive(:change_user).with(50, true)
+
+          call_exec_posix('test command', {:uid => 50, :gid => 55}, @stdin, @stdout, @stderr)
+        end
+
+        it "should exit failure if there is a problem execing the command" do
+          expect(Kernel).to receive(:exec).with('test command').and_raise("failed to execute!")
+          allow(Puppet::Util::Execution).to receive(:puts)
+          expect(Puppet::Util::Execution).to receive(:exit!).with(1)
+
+          call_exec_posix('test command', {:uid => 50, :gid => 55}, @stdin, @stdout, @stderr)
+        end
+
+        it "should properly execute commands specified as arrays" do
+          expect(Kernel).to receive(:exec).with('test command', 'with', 'arguments')
+
+          call_exec_posix(['test command', 'with', 'arguments'], {:uid => 50, :gid => 55}, @stdin, @stdout, @stderr)
+        end
+
+        it "should properly execute string commands with embedded newlines" do
+          expect(Kernel).to receive(:exec).with("/bin/echo 'foo' ; \n /bin/echo 'bar' ;")
+
+          call_exec_posix("/bin/echo 'foo' ; \n /bin/echo 'bar' ;", {:uid => 50, :gid => 55}, @stdin, @stdout, @stderr)
+        end
+
+        it 'should run the command in the specified working directory' do
+          expect(Dir).to receive(:chdir).with('cwd')
+          expect(Kernel).to receive(:exec).with('test command')
+
+          call_exec_posix('test command', { :cwd => 'cwd', :uid => 50, :gid => 55 }, @stdin, @stdout, @stderr)
+        end
+
+        it "should return the pid of the child process" do
+          expect(call_exec_posix('test command', {:uid => 50, :gid => 55}, @stdin, @stdout, @stderr)).to eq(pid)
+        end
       end
     end
 
@@ -694,6 +766,27 @@ describe Puppet::Util::Execution, if: !Puppet::Util::Platform.jruby? do
       it 'should redact commands in debug output when passed sensitive option' do
         expect(Puppet).to receive(:send_log).with(:debug, "Executing: '[redacted]'")
         Puppet::Util::Execution.execute('echo hello', {:sensitive => true})
+      end
+    end
+
+    describe "when the command cannot be started", :unless => Puppet::Util::Platform.windows? do
+      before :each do
+        allow(Puppet::Util::Execution).to receive(:execute_posix).and_return(nil)
+      end
+
+      it "reports exit status 1 and no output without waiting for a child" do
+        expect(Process).not_to receive(:waitpid2)
+
+        result = Puppet::Util::Execution.execute('test command', :failonfail => false)
+
+        expect(result.exitstatus).to eq(1)
+        expect(result).to eq('')
+      end
+
+      it "raises ExecutionFailure if failonfail is set" do
+        expect {
+          Puppet::Util::Execution.execute('test command', :failonfail => true)
+        }.to raise_error(Puppet::ExecutionFailure, /Execution of 'test command' returned 1/)
       end
     end
 
