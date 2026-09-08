@@ -152,6 +152,51 @@ describe Puppet::Node::Facts::Facter do
     end
   end
 
+  describe 'when logging the fact search paths' do
+    let(:factpath1) { File.expand_path 'one' }
+    let(:factpath2) { File.expand_path 'two' }
+
+    before :each do
+      allow(@request.environment).to receive(:modulepath).and_return([])
+      allow(@request).to receive(:options).and_return({})
+      allow(Facter).to receive(:search)
+      Puppet[:factpath] = [factpath1, factpath2].join(File::PATH_SEPARATOR)
+    end
+
+    context 'when fact directories exist' do
+      before :each do
+        allow(FileTest).to receive(:directory?).and_return(true)
+      end
+
+      it 'logs "Loading facts" once at info level' do
+        Puppet::Util::Log.level = :info
+        Puppet::Node::Facts::Facter.setup_search_paths @request
+        expect(@logs.map(&:message).count('Loading facts')).to eq(1)
+      end
+
+      it 'does not glob fact files at info level' do
+        Puppet::Util::Log.level = :info
+        expect(Dir).not_to receive(:glob).with(/\*\.rb\z/)
+        Puppet::Node::Facts::Facter.setup_search_paths @request
+      end
+
+      it 'logs each fact file at debug level' do
+        Puppet::Util::Log.level = :debug
+        allow(Dir).to receive(:glob).with("#{factpath1}/*.rb").and_return(["#{factpath1}/a.rb"])
+        allow(Dir).to receive(:glob).with("#{factpath2}/*.rb").and_return([])
+        Puppet::Node::Facts::Facter.setup_search_paths @request
+        expect(@logs.map(&:message)).to include('Loading facts', "Loading facts from #{factpath1}/a.rb")
+      end
+    end
+
+    it 'does not log "Loading facts" when no fact directory exists' do
+      Puppet::Util::Log.level = :info
+      allow(FileTest).to receive(:directory?).and_return(false)
+      Puppet::Node::Facts::Facter.setup_search_paths @request
+      expect(@logs.map(&:message)).not_to include('Loading facts')
+    end
+  end
+
   describe 'when setting up external search paths' do
     let(:pluginfactdest) { File.expand_path 'plugin/dest' }
     let(:modulepath) { File.expand_path 'module/foo' }
