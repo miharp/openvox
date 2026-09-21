@@ -76,7 +76,7 @@ jobs:
       # fires a fresh --onetime process per interval and that nothing crashes.
       - name: StartInterval workaround smoke test
         run: |
-          plist=/Library/LaunchDaemons/puppet.plist
+          plist=/Library/LaunchDaemons/org.voxpupuli.puppet.plist
           sudo launchctl bootout system "$plist" 2>/dev/null || true
           sudo /usr/libexec/PlistBuddy -c 'Delete :KeepAlive' "$plist"
           sudo /usr/libexec/PlistBuddy -c 'Add :StartInterval integer 45' "$plist"
