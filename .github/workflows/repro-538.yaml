@@ -1,0 +1,108 @@
+---
+# Throwaway workflow to reproduce OpenVoxProject/openvox#538 on hosted macOS
+# runners. Lives only on the repro-538 branch of a fork; not for merging.
+name: repro-538
+
+on:
+  push:
+    branches:
+      - repro-538
+
+permissions:
+  contents: read
+
+env:
+  AGENT_VERSION: 8.28.1
+  V4_ONLY_HOST: github.com
+  DUAL_STACK_HOST: google.com
+
+jobs:
+  repro:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - macos-26
+    defaults:
+      run:
+        working-directory: .github/repro-538
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Environment
+        run: |
+          sw_vers
+          uname -m
+          for h in "$V4_ONLY_HOST" "$DUAL_STACK_HOST"; do
+            echo "== $h A:    $(dig +short A "$h" | tr '\n' ' ')"
+            echo "== $h AAAA: $(dig +short AAAA "$h" | tr '\n' ' ')"
+          done
+
+      - name: Repro with Apple system ruby
+        run: |
+          /usr/bin/ruby -v
+          /usr/bin/ruby repro.rb "$V4_ONLY_HOST" | tee -a results.txt
+          /usr/bin/ruby repro.rb "$DUAL_STACK_HOST" | tee -a results.txt
+
+      - name: Repro in plain C
+        run: |
+          xcrun --show-sdk-version
+          cc -o repro_default repro.c
+          echo "C default link, $V4_ONLY_HOST: $(./repro_default "$V4_ONLY_HOST" 2>/dev/null)" | tee -a results.txt
+          cc -o repro_min13 repro.c -Wl,-platform_version,macos,13.0,14.0
+          echo "C minos 13.0, $V4_ONLY_HOST: $(./repro_min13 "$V4_ONLY_HOST" 2>/dev/null)" | tee -a results.txt
+
+      - name: Install openvox-agent
+        run: |
+          dmg="openvox-agent-${AGENT_VERSION}-1.macos.all.arm64.dmg"
+          curl -fsSLO "https://downloads.voxpupuli.org/mac/openvox8/${dmg}"
+          hdiutil attach "$dmg" -nobrowse -mountpoint /tmp/openvox-dmg
+          sudo installer -pkg /tmp/openvox-dmg/*.pkg -target /
+          hdiutil detach /tmp/openvox-dmg
+          /opt/puppetlabs/bin/puppet --version
+          otool -l /opt/puppetlabs/puppet/bin/ruby | grep -A4 LC_BUILD_VERSION | grep -E 'minos|sdk'
+
+      - name: Repro with bundled agent ruby
+        run: |
+          /opt/puppetlabs/puppet/bin/ruby -v
+          /opt/puppetlabs/puppet/bin/ruby repro.rb "$V4_ONLY_HOST" | sed 's/^/bundled ruby: /' | tee -a results.txt
+          /opt/puppetlabs/puppet/bin/ruby repro.rb "$DUAL_STACK_HOST" | sed 's/^/bundled ruby: /' | tee -a results.txt
+
+      # No server here, so runs fail to connect. This only checks that launchd
+      # fires a fresh --onetime process per interval and that nothing crashes.
+      - name: StartInterval workaround smoke test
+        run: |
+          plist=/Library/LaunchDaemons/puppet.plist
+          sudo launchctl bootout system "$plist" 2>/dev/null || true
+          sudo /usr/libexec/PlistBuddy -c 'Delete :KeepAlive' "$plist"
+          sudo /usr/libexec/PlistBuddy -c 'Add :StartInterval integer 45' "$plist"
+          sudo /usr/libexec/PlistBuddy -c 'Add :ProgramArguments: string --onetime' "$plist"
+          sudo plutil -lint "$plist"
+          sudo /usr/libexec/PlistBuddy -c 'Print' "$plist"
+          sudo rm -f /var/log/puppetlabs/puppet/puppet.log
+          sudo launchctl bootstrap system "$plist"
+          sleep 150
+          sudo launchctl print system/puppet | grep -E 'state|runs|last exit' || true
+          sudo cat /var/log/puppetlabs/puppet/puppet.log || true
+          echo "workaround: launchd runs = $(sudo launchctl print system/puppet | awk '/runs =/ {print $3}')" | tee -a results.txt
+
+      - name: Crash reports
+        if: always()
+        run: |
+          reports=$(ls /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -E '\.ips$' || true)
+          echo "crash reports: $(echo "$reports" | grep -c . || true)" | tee -a results.txt
+          echo "$reports"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.os }} ($(sw_vers -productVersion))"
+            echo '```'
+            cat results.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
