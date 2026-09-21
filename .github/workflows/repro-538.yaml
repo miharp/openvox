@@ -12,13 +12,12 @@ permissions:
   contents: read
 
 env:
-  AGENT_VERSION: 8.28.1
   V4_ONLY_HOST: github.com
   DUAL_STACK_HOST: google.com
 
 jobs:
   repro:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.os }} / agent ${{ matrix.agent.version }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -27,6 +26,11 @@ jobs:
         os:
           - macos-15
           - macos-26
+        agent:
+          - version: 8.28.1
+            repo: openvox8
+          - version: 9.0.0~rc1
+            repo: openvox9
     defaults:
       run:
         working-directory: .github/repro-538
@@ -58,8 +62,8 @@ jobs:
 
       - name: Install openvox-agent
         run: |
-          dmg="openvox-agent-${AGENT_VERSION}-1.macos.all.arm64.dmg"
-          curl -fsSLO "https://downloads.voxpupuli.org/mac/openvox8/${dmg}"
+          dmg="openvox-agent-${{ matrix.agent.version }}-1.macos.all.arm64.dmg"
+          curl -fsSLO "https://downloads.voxpupuli.org/mac/${{ matrix.agent.repo }}/${dmg}"
           hdiutil attach "$dmg" -nobrowse -mountpoint /tmp/openvox-dmg
           sudo installer -pkg /tmp/openvox-dmg/*.pkg -target /
           hdiutil detach /tmp/openvox-dmg
@@ -101,7 +105,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### ${{ matrix.os }} ($(sw_vers -productVersion))"
+            echo "### ${{ matrix.os }} ($(sw_vers -productVersion)), agent ${{ matrix.agent.version }}"
             echo '```'
             cat results.txt
             echo '```'
