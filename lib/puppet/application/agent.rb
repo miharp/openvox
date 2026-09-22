@@ -508,6 +508,9 @@ class Puppet::Application::Agent < Puppet::Application
 
   def setup_agent
     agent = Puppet::Agent.new(Puppet::Configurer, !(Puppet[:onetime]))
+    # like Puppet::Daemon#argv: lets the agent respawn itself for runs on
+    # platforms where the run cannot be performed in a forked child
+    agent.argv = @argv
 
     enable_disable_client(agent) if options[:enable] or options[:disable]
 

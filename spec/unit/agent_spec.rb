@@ -241,6 +241,9 @@ describe Puppet::Agent do
 
     describe "when should_fork is true", :if => Puppet.features.posix? && RUBY_PLATFORM != 'java' do
       before do
+        # forking is disabled on macOS (GH-538); pretend we are elsewhere so
+        # the fork code path is still exercised when running tests there
+        allow(Puppet::Util::Platform).to receive(:darwin?).and_return(false)
         @agent = Puppet::Agent.new(AgentTestClient, true)
 
         # So we don't actually try to hit the filesystem.
@@ -373,6 +376,83 @@ describe Puppet::Agent do
       it "should never fork" do
         agent = Puppet::Agent.new(AgentTestClient, true)
         expect(agent.should_fork).to be_falsey
+      end
+    end
+
+    describe "on Darwin", :if => Puppet.features.posix? && RUBY_PLATFORM != 'java' do
+      let(:ruby) { File.join(RbConfig::CONFIG['bindir'], RbConfig::CONFIG['ruby_install_name'] + RbConfig::CONFIG['EXEEXT']) }
+      # Any existing file will do as the script to respawn; the forked run in
+      # other examples overwrites $0, so it cannot be relied on here.
+      let(:program) { File.expand_path(__FILE__) }
+      let(:onetime_args) { ['--onetime', '--no-daemonize', '--no-splay', '--detailed-exitcodes'] }
+
+      around do |example|
+        original = $PROGRAM_NAME
+        $PROGRAM_NAME = program
+        example.run
+      ensure
+        $PROGRAM_NAME = original
+      end
+
+      before do
+        allow(Puppet::Util::Platform).to receive(:darwin?).and_return(true)
+        @agent = Puppet::Agent.new(AgentTestClient, true)
+        allow(@agent).to receive(:lock).and_yield
+      end
+
+      it "should still be able to fork" do
+        expect(@agent.should_fork).to be_truthy
+      end
+
+      it "should run the agent in a fresh one-time process when the original command line is known" do
+        @agent.argv = ['agent', '--verbose']
+
+        status = double('status', :exitstatus => 2)
+        expect(Kernel).to receive(:spawn)
+          .with(ruby, program, 'agent', '--verbose', *onetime_args)
+          .and_return(12345)
+        expect(Process).to receive(:waitpid2).with(12345).and_return([12345, status])
+        expect(Kernel).not_to receive(:fork)
+        expect(AgentTestClient).not_to receive(:new)
+
+        expect(@agent.run).to eq(2)
+      end
+
+      it "should fork as usual when the original command line is unknown" do
+        expect(Kernel).not_to receive(:spawn)
+        expect(@agent).to receive(:run_in_fork).with(true).and_return(0)
+
+        @agent.run
+      end
+
+      it "should fork as usual when the script cannot be found" do
+        @agent.argv = ['agent', '--verbose']
+        allow(File).to receive(:file?).and_call_original
+        allow(File).to receive(:file?).with(program).and_return(false)
+
+        expect(Kernel).not_to receive(:spawn)
+        expect(@agent).to receive(:run_in_fork).with(true).and_return(0)
+
+        @agent.run
+      end
+
+      it "should fork as usual when client options cannot be expressed on a command line" do
+        @agent.argv = ['agent', '--verbose']
+
+        expect(Kernel).not_to receive(:spawn)
+        expect(@agent).to receive(:run_in_fork).with(true).and_return(0)
+
+        @agent.run(:transaction_uuid => 'some_uuid')
+      end
+
+      it "should fall back to forking when the new process cannot be started" do
+        @agent.argv = ['agent', '--verbose']
+
+        expect(Kernel).to receive(:spawn).and_raise(Errno::ENOENT, program)
+        expect(Puppet).to receive(:log_exception).with(an_instance_of(Errno::ENOENT), /forking instead/)
+        expect(@agent).to receive(:run_in_fork).with(true).and_return(0)
+
+        expect(@agent.run).to eq(0)
       end
     end
 
