@@ -75,6 +75,7 @@ jobs:
           /opt/puppetlabs/puppet/bin/ruby -v
           /opt/puppetlabs/puppet/bin/ruby repro.rb "$V4_ONLY_HOST" | sed 's/^/bundled ruby: /' | tee -a results.txt
           /opt/puppetlabs/puppet/bin/ruby repro.rb "$DUAL_STACK_HOST" | sed 's/^/bundled ruby: /' | tee -a results.txt
+          OS_ACTIVITY_MODE=disable /opt/puppetlabs/puppet/bin/ruby repro.rb "$V4_ONLY_HOST" | sed 's/^/bundled ruby, OS_ACTIVITY_MODE=disable: /' | tee -a results.txt
 
       # The real agent daemon with a fake local PKI and an unreachable A-only
       # server name. R = parent touched the network before forking, ok = forked
@@ -84,6 +85,7 @@ jobs:
           ./daemon_test.sh control 1d 50 2>&1 | grep -v '^  log:' | tee -a results.txt
           ./daemon_test.sh armed 1s 50 2>&1 | grep -v '^  log:' | tee -a results.txt
           ./daemon_test.sh staged 40s 110 2>&1 | grep -v '^  log:' | tee -a results.txt
+          OS_ACTIVITY_MODE=disable ./daemon_test.sh armed+OS_ACTIVITY_MODE=disable 1s 50 2>&1 | grep -v '^  log:' | tee -a results.txt
 
       # No server here, so runs fail to connect. This only checks that launchd
       # fires a fresh --onetime process per interval and that nothing crashes.
