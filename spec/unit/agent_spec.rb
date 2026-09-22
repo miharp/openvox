@@ -385,6 +385,8 @@ describe Puppet::Agent do
       # other examples overwrites $0, so it cannot be relied on here.
       let(:program) { File.expand_path(__FILE__) }
       let(:onetime_args) { ['--onetime', '--no-daemonize', '--no-splay', '--detailed-exitcodes'] }
+      let(:lib_dir) { File.expand_path('../../lib', __dir__) }
+      let(:working_directory) { Dir.pwd }
 
       around do |example|
         original = $PROGRAM_NAME
@@ -409,13 +411,29 @@ describe Puppet::Agent do
 
         status = double('status', :exitstatus => 2)
         expect(Kernel).to receive(:spawn)
-          .with(ruby, program, 'agent', '--verbose', *onetime_args)
+          .with(ruby, '-I', lib_dir, program, 'agent', '--verbose', *onetime_args, chdir: working_directory)
           .and_return(12345)
         expect(Process).to receive(:waitpid2).with(12345).and_return([12345, status])
         expect(Kernel).not_to receive(:fork)
         expect(AgentTestClient).not_to receive(:new)
 
         expect(@agent.run).to eq(2)
+      end
+
+      it "should run the new process in the directory the agent was created in, not the daemon's" do
+        Dir.mktmpdir do |dir|
+          allow(Dir).to receive(:pwd).and_return(dir)
+          agent = Puppet::Agent.new(AgentTestClient, true)
+          allow(agent).to receive(:lock).and_yield
+          agent.argv = ['agent']
+          allow(Dir).to receive(:pwd).and_return('/')
+
+          status = double('status', :exitstatus => 0)
+          expect(Kernel).to receive(:spawn).with(any_args, chdir: dir).and_return(12345)
+          expect(Process).to receive(:waitpid2).with(12345).and_return([12345, status])
+
+          agent.run
+        end
       end
 
       it "should fork as usual when the original command line is unknown" do

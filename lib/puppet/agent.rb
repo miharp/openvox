@@ -42,9 +42,15 @@ class Puppet::Agent
     @should_fork = can_fork? && should_fork
     @should_exec = exec_instead_of_fork? && should_fork
     @client_class = client_class
-    # Captured now, before the daemon changes directory, so that a relative
-    # script path (`ruby bin/puppet`) can still be respawned later.
+    # Captured now, before the daemon changes directory to /, so that the
+    # respawned process resolves the script and any relative arguments
+    # (`--config conf/puppet.conf`) the same way this one did.
     @program_name = File.expand_path($PROGRAM_NAME)
+    @working_directory = begin
+      Dir.pwd
+    rescue SystemCallError
+      nil
+    end
   end
 
   def can_fork?
@@ -241,17 +247,20 @@ class Puppet::Agent
   private
 
   # Build the command line used to respawn this agent as a fresh one-time
-  # process: the running ruby, the script it is running, the original
-  # arguments and ONETIME_ARGS. Returns nil if the run cannot be expressed
-  # as a command line, because the original invocation is unknown (argv
-  # unset), the script cannot be found, or the caller passed client options
-  # that have no command line equivalent. The run is then forked as usual.
+  # process: the running ruby, the directory this Puppet was loaded from
+  # (so a checkout run with `ruby -Ilib` respawns the same code), the script
+  # it is running, the original arguments and ONETIME_ARGS. Other load path
+  # or environment customizations reach the child through the inherited
+  # RUBYLIB and RUBYOPT. Returns nil if the run cannot be expressed as a
+  # command line, because the original invocation is unknown (argv unset),
+  # the script cannot be found, or the caller passed client options that
+  # have no command line equivalent. The run is then forked as usual.
   def command_for_new_process(client_options)
     return nil if argv.nil?
     return nil if client_options[:transaction_uuid] || client_options[:job_id]
     return nil unless File.file?(@program_name)
 
-    [ruby_path, @program_name] + argv + ONETIME_ARGS
+    [ruby_path, '-I', puppet_lib_dir, @program_name] + argv + ONETIME_ARGS
   end
 
   # Run the agent in a freshly exec'd one-time process instead of a forked
@@ -263,7 +272,8 @@ class Puppet::Agent
   # skip the run.
   def run_in_new_process(command, client_options, ssl_context)
     Puppet.debug { "Spawning one-time agent run: '#{command.join(' ')}'" }
-    child_pid = Kernel.spawn(*command)
+    options = @working_directory ? { chdir: @working_directory } : {}
+    child_pid = Kernel.spawn(*command, **options)
     exit_code = Process.waitpid2(child_pid)
     exit_code[1].exitstatus
   rescue SystemCallError => detail
@@ -275,6 +285,10 @@ class Puppet::Agent
   # to spawn as an argument rather than through a shell.
   def ruby_path
     File.join(RbConfig::CONFIG['bindir'], RbConfig::CONFIG['ruby_install_name'] + RbConfig::CONFIG['EXEEXT'])
+  end
+
+  def puppet_lib_dir
+    File.expand_path('..', __dir__)
   end
 
   # Create and yield a client instance, keeping a reference
