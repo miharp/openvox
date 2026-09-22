@@ -33,9 +33,9 @@ class Puppet::Agent
 
   attr_reader :client_class, :client, :should_fork
 
-  # The original command line (including the subcommand) this process was
-  # started with, needed to respawn the agent on platforms where the run
-  # cannot fork. Set by the application, like Puppet::Daemon#argv.
+  # The command line (subcommand and arguments) this agent was started
+  # with, needed to respawn the agent on platforms where the run cannot
+  # fork. Set by the application, like Puppet::Daemon#argv.
   attr_accessor :argv
 
   def initialize(client_class, should_fork = true)
@@ -43,9 +43,8 @@ class Puppet::Agent
     @should_exec = exec_instead_of_fork? && should_fork
     @client_class = client_class
     # Captured now, before the daemon changes directory to /, so that the
-    # respawned process resolves the script and any relative arguments
-    # (`--config conf/puppet.conf`) the same way this one did.
-    @program_name = File.expand_path($PROGRAM_NAME)
+    # respawned process resolves relative arguments (`--config
+    # conf/puppet.conf`) the same way this one did.
     @working_directory = begin
       Dir.pwd
     rescue SystemCallError
@@ -247,20 +246,21 @@ class Puppet::Agent
   private
 
   # Build the command line used to respawn this agent as a fresh one-time
-  # process: the running ruby, the directory this Puppet was loaded from
-  # (so a checkout run with `ruby -Ilib` respawns the same code), the script
-  # it is running, the original arguments and ONETIME_ARGS. Other load path
-  # or environment customizations reach the child through the inherited
-  # RUBYLIB and RUBYOPT. Returns nil if the run cannot be expressed as a
-  # command line, because the original invocation is unknown (argv unset),
-  # the script cannot be found, or the caller passed client options that
-  # have no command line equivalent. The run is then forked as usual.
+  # process: the running ruby, loading this Puppet (so a checkout run with
+  # `ruby -Ilib` respawns the same code) and running the same entry point
+  # as bin/puppet, with the original arguments and ONETIME_ARGS. Nothing
+  # depends on how this process was started, which may not have been
+  # through bin/puppet at all. Other load path or environment
+  # customizations reach the child through the inherited RUBYLIB and
+  # RUBYOPT. Returns nil if the run cannot be expressed as a command line,
+  # because the original invocation is unknown (argv unset) or the caller
+  # passed client options that have no command line equivalent. The run is
+  # then forked as usual.
   def command_for_new_process(client_options)
     return nil if argv.nil?
     return nil if client_options[:transaction_uuid] || client_options[:job_id]
-    return nil unless File.file?(@program_name)
 
-    [ruby_path, '-I', puppet_lib_dir, @program_name] + argv + ONETIME_ARGS
+    [ruby_path, '-I', puppet_lib_dir, '-rpuppet/util/command_line', '-e', 'Puppet::Util::CommandLine.new.execute', '--'] + argv + ONETIME_ARGS
   end
 
   # Run the agent in a freshly exec'd one-time process instead of a forked

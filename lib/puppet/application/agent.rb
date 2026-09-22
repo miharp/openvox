@@ -45,7 +45,11 @@ class Puppet::Application::Agent < Puppet::Application
       options[opt] = val
     end
 
-    @argv = ARGV.dup
+    # The subcommand and its arguments, kept for Puppet::Daemon#reexec and
+    # Puppet::Agent#argv. Taken from the parsed command line rather than
+    # ARGV so that it is right however this application was started, and
+    # captured here because parse_options consumes command_line.args.
+    @argv = [command_line.subcommand_name, *command_line.args]
   end
 
   option("--disable [MESSAGE]") do |message|

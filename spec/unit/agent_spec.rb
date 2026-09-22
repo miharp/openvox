@@ -381,20 +381,10 @@ describe Puppet::Agent do
 
     describe "on Darwin", :if => Puppet.features.posix? && RUBY_PLATFORM != 'java' do
       let(:ruby) { File.join(RbConfig::CONFIG['bindir'], RbConfig::CONFIG['ruby_install_name'] + RbConfig::CONFIG['EXEEXT']) }
-      # Any existing file will do as the script to respawn; the forked run in
-      # other examples overwrites $0, so it cannot be relied on here.
-      let(:program) { File.expand_path(__FILE__) }
-      let(:onetime_args) { ['--onetime', '--no-daemonize', '--no-splay', '--detailed-exitcodes'] }
       let(:lib_dir) { File.expand_path('../../lib', __dir__) }
+      let(:entry_point) { ['-rpuppet/util/command_line', '-e', 'Puppet::Util::CommandLine.new.execute', '--'] }
+      let(:onetime_args) { ['--onetime', '--no-daemonize', '--no-splay', '--detailed-exitcodes'] }
       let(:working_directory) { Dir.pwd }
-
-      around do |example|
-        original = $PROGRAM_NAME
-        $PROGRAM_NAME = program
-        example.run
-      ensure
-        $PROGRAM_NAME = original
-      end
 
       before do
         allow(Puppet::Util::Platform).to receive(:darwin?).and_return(true)
@@ -411,7 +401,7 @@ describe Puppet::Agent do
 
         status = double('status', :exitstatus => 2)
         expect(Kernel).to receive(:spawn)
-          .with(ruby, '-I', lib_dir, program, 'agent', '--verbose', *onetime_args, chdir: working_directory)
+          .with(ruby, '-I', lib_dir, *entry_point, 'agent', '--verbose', *onetime_args, chdir: working_directory)
           .and_return(12345)
         expect(Process).to receive(:waitpid2).with(12345).and_return([12345, status])
         expect(Kernel).not_to receive(:fork)
@@ -443,17 +433,6 @@ describe Puppet::Agent do
         @agent.run
       end
 
-      it "should fork as usual when the script cannot be found" do
-        @agent.argv = ['agent', '--verbose']
-        allow(File).to receive(:file?).and_call_original
-        allow(File).to receive(:file?).with(program).and_return(false)
-
-        expect(Kernel).not_to receive(:spawn)
-        expect(@agent).to receive(:run_in_fork).with(true).and_return(0)
-
-        @agent.run
-      end
-
       it "should fork as usual when client options cannot be expressed on a command line" do
         @agent.argv = ['agent', '--verbose']
 
@@ -466,7 +445,7 @@ describe Puppet::Agent do
       it "should fall back to forking when the new process cannot be started" do
         @agent.argv = ['agent', '--verbose']
 
-        expect(Kernel).to receive(:spawn).and_raise(Errno::ENOENT, program)
+        expect(Kernel).to receive(:spawn).and_raise(Errno::ENOENT, ruby)
         expect(Puppet).to receive(:log_exception).with(an_instance_of(Errno::ENOENT), /forking instead/)
         expect(@agent).to receive(:run_in_fork).with(true).and_return(0)
 
