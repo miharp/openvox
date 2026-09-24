@@ -241,6 +241,9 @@ describe Puppet::Agent do
 
     describe "when should_fork is true", :if => Puppet.features.posix? && RUBY_PLATFORM != 'java' do
       before do
+        # forking is disabled on macOS (GH-538); pretend we are elsewhere so
+        # the fork code path is still exercised when running tests there
+        allow(Puppet::Util::Platform).to receive(:darwin?).and_return(false)
         @agent = Puppet::Agent.new(AgentTestClient, true)
 
         # So we don't actually try to hit the filesystem.
@@ -373,6 +376,97 @@ describe Puppet::Agent do
       it "should never fork" do
         agent = Puppet::Agent.new(AgentTestClient, true)
         expect(agent.should_fork).to be_falsey
+      end
+    end
+
+    describe "on Darwin", :if => Puppet.features.posix? && RUBY_PLATFORM != 'java' do
+      let(:ruby) { File.join(RbConfig::CONFIG['bindir'], RbConfig::CONFIG['ruby_install_name'] + RbConfig::CONFIG['EXEEXT']) }
+      let(:lib_dir) { File.expand_path('../../lib', __dir__) }
+      let(:entry_point) { ['-rpuppet/util/command_line', '-e', 'Puppet::Util::CommandLine.new.execute', '--'] }
+      let(:onetime_args) { ['--onetime', '--no-daemonize', '--no-splay', '--detailed-exitcodes'] }
+      let(:working_directory) { Dir.pwd }
+
+      before do
+        allow(Puppet::Util::Platform).to receive(:darwin?).and_return(true)
+        @agent = Puppet::Agent.new(AgentTestClient, true)
+        allow(@agent).to receive(:lock).and_yield
+      end
+
+      it "should still be able to fork" do
+        expect(@agent.should_fork).to be_truthy
+      end
+
+      it "should run the agent in a fresh one-time process when the original command line is known" do
+        @agent.argv = ['agent', '--verbose']
+
+        status = double('status', :exitstatus => 2)
+        expect(Kernel).to receive(:spawn)
+          .with(ruby, '-I', lib_dir, *entry_point, 'agent', '--verbose', *onetime_args, chdir: working_directory)
+          .and_return(12345)
+        expect(@agent).to receive(:wait_for_child).with(12345).and_return([12345, status])
+        expect(Kernel).not_to receive(:fork)
+        expect(AgentTestClient).not_to receive(:new)
+
+        expect(@agent.run).to eq(2)
+      end
+
+      it "should kill the new process once runtimeout plus the grace period has elapsed, like a forked one" do
+        @agent.argv = ['agent']
+        Puppet[:runtimeout] = 10
+        Puppet[:http_connect_timeout] = 5
+        Puppet[:http_read_timeout] = 5
+        allow(@agent).to receive(:sleep)
+        allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC).and_return(100, 105, 120)
+
+        expect(Kernel).to receive(:spawn).and_return(12345)
+        expect(Process).to receive(:waitpid2).with(12345, Process::WNOHANG).twice.and_return(nil)
+        expect(Process).to receive(:kill).with(:KILL, 12345)
+        expect(Process).to receive(:waitpid2).with(12345).and_return([12345, instance_double(Process::Status, exitstatus: nil)])
+        expect(Puppet).to receive(:err).with(/did not exit within 10 seconds of the run timeout/)
+
+        expect(@agent.run).to be_nil
+      end
+
+      it "should run the new process in the directory the agent was created in, not the daemon's" do
+        Dir.mktmpdir do |dir|
+          allow(Dir).to receive(:pwd).and_return(dir)
+          agent = Puppet::Agent.new(AgentTestClient, true)
+          allow(agent).to receive(:lock).and_yield
+          agent.argv = ['agent']
+          allow(Dir).to receive(:pwd).and_return('/')
+
+          status = double('status', :exitstatus => 0)
+          expect(Kernel).to receive(:spawn).with(any_args, chdir: dir).and_return(12345)
+          expect(agent).to receive(:wait_for_child).with(12345).and_return([12345, status])
+
+          agent.run
+        end
+      end
+
+      it "should fork as usual when the original command line is unknown" do
+        expect(Kernel).not_to receive(:spawn)
+        expect(@agent).to receive(:run_in_fork).with(true).and_return(0)
+
+        @agent.run
+      end
+
+      it "should fork as usual when client options cannot be expressed on a command line" do
+        @agent.argv = ['agent', '--verbose']
+
+        expect(Kernel).not_to receive(:spawn)
+        expect(@agent).to receive(:run_in_fork).with(true).and_return(0)
+
+        @agent.run(:transaction_uuid => 'some_uuid')
+      end
+
+      it "should fall back to forking when the new process cannot be started" do
+        @agent.argv = ['agent', '--verbose']
+
+        expect(Kernel).to receive(:spawn).and_raise(Errno::ENOENT, ruby)
+        expect(Puppet).to receive(:log_exception).with(an_instance_of(Errno::ENOENT), /forking instead/)
+        expect(@agent).to receive(:run_in_fork).with(true).and_return(0)
+
+        expect(@agent.run).to eq(0)
       end
     end
 

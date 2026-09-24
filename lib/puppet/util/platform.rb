@@ -21,6 +21,11 @@ module Puppet
       end
       module_function :solaris?
 
+      def darwin?
+        RUBY_PLATFORM.include?('darwin')
+      end
+      module_function :darwin?
+
       def default_paths
         return [] if windows?
 

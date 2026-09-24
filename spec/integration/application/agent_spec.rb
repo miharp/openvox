@@ -907,6 +907,11 @@ describe "puppet agent", unless: Puppet::Util::Platform.jruby? do
           instance.agent.run(splay: false)
         end
 
+        # The runs depend on settings and stubs that only exist in this
+        # process, so keep them in a forked child rather than a respawned
+        # one-time agent, as on other platforms.
+        allow(Puppet::Util::Platform).to receive(:darwin?).and_return(false)
+
         agent.command_line.args << '--verbose'
         expect {
           agent.run
