@@ -196,11 +196,12 @@ class Puppet::Agent
     status.exitstatus
   end
 
-  # Wait for the forked child to exit. The child enforces `runtimeout` on its
-  # own run, but it may fail to exit afterwards (a stranded thread, a hung
-  # subprocess, etc.). Without a deadline here, the parent blocks forever and
-  # the agent stops checking in. Once the run timeout plus a grace period has
-  # elapsed, the child is killed so the daemon can carry on.
+  # Wait for the child running the agent run, forked or spawned, to exit.
+  # The child enforces `runtimeout` on its own run, but it may fail to exit
+  # afterwards (a stranded thread, a hung subprocess, etc.). Without a
+  # deadline here, the parent blocks forever and the agent stops checking
+  # in. Once the run timeout plus a grace period has elapsed, the child is
+  # killed so the daemon can carry on.
   def wait_for_child(child_pid)
     deadline = child_deadline
     return Process.waitpid2(child_pid) unless deadline
@@ -267,15 +268,15 @@ class Puppet::Agent
   # copy of this one. Uses spawn (fork+exec) so that the child never runs
   # Ruby code between fork and exec. The child takes the agent lock, honors
   # runtimeout and reports the run result in its exit status via
-  # --detailed-exitcodes, mirroring what a forked run returns. If the
-  # process cannot be started at all, fall back to a forked run rather than
-  # skip the run.
+  # --detailed-exitcodes, mirroring what a forked run returns, and is waited
+  # for with the same deadline as a forked child. If the process cannot be
+  # started at all, fall back to a forked run rather than skip the run.
   def run_in_new_process(command, client_options, ssl_context)
     Puppet.debug { "Spawning one-time agent run: '#{command.join(' ')}'" }
     options = @working_directory ? { chdir: @working_directory } : {}
     child_pid = Kernel.spawn(*command, **options)
-    exit_code = Process.waitpid2(child_pid)
-    exit_code[1].exitstatus
+    _, status = wait_for_child(child_pid)
+    status.exitstatus
   rescue SystemCallError => detail
     Puppet.log_exception(detail, _("Could not start a new process for the %{client_class} run, forking instead: %{detail}") % { client_class: client_class, detail: detail })
     run_in_process_or_fork(client_options, ssl_context)

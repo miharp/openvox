@@ -403,11 +403,28 @@ describe Puppet::Agent do
         expect(Kernel).to receive(:spawn)
           .with(ruby, '-I', lib_dir, *entry_point, 'agent', '--verbose', *onetime_args, chdir: working_directory)
           .and_return(12345)
-        expect(Process).to receive(:waitpid2).with(12345).and_return([12345, status])
+        expect(@agent).to receive(:wait_for_child).with(12345).and_return([12345, status])
         expect(Kernel).not_to receive(:fork)
         expect(AgentTestClient).not_to receive(:new)
 
         expect(@agent.run).to eq(2)
+      end
+
+      it "should kill the new process once runtimeout plus the grace period has elapsed, like a forked one" do
+        @agent.argv = ['agent']
+        Puppet[:runtimeout] = 10
+        Puppet[:http_connect_timeout] = 5
+        Puppet[:http_read_timeout] = 5
+        allow(@agent).to receive(:sleep)
+        allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC).and_return(100, 105, 120)
+
+        expect(Kernel).to receive(:spawn).and_return(12345)
+        expect(Process).to receive(:waitpid2).with(12345, Process::WNOHANG).twice.and_return(nil)
+        expect(Process).to receive(:kill).with(:KILL, 12345)
+        expect(Process).to receive(:waitpid2).with(12345).and_return([12345, instance_double(Process::Status, exitstatus: nil)])
+        expect(Puppet).to receive(:err).with(/did not exit within 10 seconds of the run timeout/)
+
+        expect(@agent.run).to be_nil
       end
 
       it "should run the new process in the directory the agent was created in, not the daemon's" do
@@ -420,7 +437,7 @@ describe Puppet::Agent do
 
           status = double('status', :exitstatus => 0)
           expect(Kernel).to receive(:spawn).with(any_args, chdir: dir).and_return(12345)
-          expect(Process).to receive(:waitpid2).with(12345).and_return([12345, status])
+          expect(agent).to receive(:wait_for_child).with(12345).and_return([12345, status])
 
           agent.run
         end
