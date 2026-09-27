@@ -11,7 +11,14 @@
         <array>
                 <string>/bin/sh</string>
                 <string>-c</string>
-                <string>sleep <%= $delay %>; /bin/launchctl bootout system/puppet; /bin/launchctl bootstrap system <%= $plist %>; /bin/launchctl bootout system/<%= $label %></string>
+                <!-- bootout returns before the agent has exited, and bootstrap
+                     fails with "5: Input/output error" until the old job is
+                     gone, so wait for it and retry. -->
+                <string>sleep <%= $delay %>
+/bin/launchctl bootout system/puppet
+for i in $(seq 60); do /bin/launchctl print system/puppet 1&gt;/dev/null 2&gt;&amp;1 || break; sleep 1; done
+for i in $(seq 10); do /bin/launchctl bootstrap system <%= $plist %> &amp;&amp; break; sleep 3; done
+/bin/launchctl bootout system/<%= $label %></string>
         </array>
         <key>RunAtLoad</key>
         <true/>
