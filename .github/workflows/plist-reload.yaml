@@ -23,11 +23,10 @@ jobs:
         os:
           - macos-15
           - macos-26
+        # daemon-inline, daemon-helper, scheduled-inline and scheduled-helper
+        # passed/failed as expected in run 36318610598
         test:
-          - daemon-inline
-          - daemon-helper
-          - scheduled-inline
-          - scheduled-helper
+          - scheduler-cron
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +42,13 @@ jobs:
       - name: Fetch fake PKI helper
         run: git fetch --depth 1 origin repro-538 && git show FETCH_HEAD:.github/repro-538/fake_ssl.rb > .github/plist-reload/fake_ssl.rb
 
+      - name: Vendor puppet_run_scheduler and stdlib
+        run: |
+          mkdir -p .github/plist-reload/vendor
+          git clone -q --depth 1 https://github.com/voxpupuli/puppet-puppet_run_scheduler .github/plist-reload/vendor/puppet_run_scheduler
+          git clone -q --depth 1 -b v9.7.0 https://github.com/puppetlabs/puppetlabs-stdlib .github/plist-reload/vendor/stdlib
+          git -C .github/plist-reload/vendor/puppet_run_scheduler log --oneline -1
+
       - name: Reload test
         run: |
           sw_vers -productVersion
@@ -50,6 +56,7 @@ jobs:
           case "$TEST" in
             daemon-*) sudo bash .github/plist-reload/run_test.sh "$method" 60 180 2>&1 | tee result.txt ;;
             scheduled-*) sudo bash .github/plist-reload/run_scheduled.sh "$method" 60 150 270 2>&1 | tee result.txt ;;
+            scheduler-cron) sudo bash .github/plist-reload/run_scheduler.sh 300 2>&1 | tee result.txt ;;
           esac
         env:
           TEST: ${{ matrix.test }}
