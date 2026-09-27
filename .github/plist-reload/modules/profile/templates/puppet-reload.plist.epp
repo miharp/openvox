@@ -1,0 +1,23 @@
+<%- | String $label, String $plist, Integer $delay | -%>
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Managed by Puppet (profile::puppet_launchd). One-shot job that reloads
+     the agent's launchd job from outside the agent's process group. -->
+<plist version="1.0">
+<dict>
+        <key>Label</key>
+        <string><%= $label %></string>
+        <key>ProgramArguments</key>
+        <array>
+                <string>/bin/sh</string>
+                <string>-c</string>
+                <string>sleep <%= $delay %>; /bin/launchctl bootout system/puppet; /bin/launchctl bootstrap system <%= $plist %>; /bin/launchctl bootout system/<%= $label %></string>
+        </array>
+        <key>RunAtLoad</key>
+        <true/>
+        <key>StandardErrorPath</key>
+        <string>/var/log/puppetlabs/puppet/puppet-reload.log</string>
+        <key>StandardOutPath</key>
+        <string>/var/log/puppetlabs/puppet/puppet-reload.log</string>
+</dict>
+</plist>

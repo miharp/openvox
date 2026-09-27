@@ -1,0 +1,57 @@
+---
+# Throwaway workflow: checks that a Puppet-managed launchd plist change can
+# reload the openvox agent from inside its own run (OpenVoxProject/openvox#538
+# workaround). Lives only on a fork branch; not for merging.
+name: plist-reload
+
+on:
+  push:
+    branches:
+      - test-538-plist-reload
+
+permissions:
+  contents: read
+
+jobs:
+  reload:
+    name: ${{ matrix.os }} / ${{ matrix.method }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - macos-26
+        method:
+          - inline
+          - helper
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install openvox-agent 8.28.1
+        run: |
+          dmg=openvox-agent-8.28.1-1.macos.all.arm64.dmg
+          curl -fsSLO "https://downloads.voxpupuli.org/mac/openvox8/${dmg}"
+          hdiutil attach "$dmg" -nobrowse -mountpoint /tmp/openvox-dmg
+          sudo installer -pkg /tmp/openvox-dmg/*.pkg -target /
+          hdiutil detach /tmp/openvox-dmg
+          /opt/puppetlabs/bin/puppet --version
+
+      - name: Fetch fake PKI helper
+        run: git fetch --depth 1 origin repro-538 && git show FETCH_HEAD:.github/repro-538/fake_ssl.rb > .github/plist-reload/fake_ssl.rb
+
+      - name: Reload test
+        run: |
+          sw_vers -productVersion
+          sudo bash .github/plist-reload/run_test.sh ${{ matrix.method }} 60 180 2>&1 | tee result.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.os }} ($(sw_vers -productVersion)) / ${{ matrix.method }}"
+            echo '```'
+            grep -E '^(RESULT|== t=0|   t=)' result.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
