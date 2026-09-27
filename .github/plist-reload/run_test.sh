@@ -35,7 +35,7 @@ rm -rf /etc/puppetlabs/puppet/ssl
 "$ruby" "$here/fake_ssl.rb" /etc/puppetlabs/puppet/ssl "$certname" >/dev/null
 catdir=/opt/puppetlabs/puppet/cache/client_data/catalog
 mkdir -p "$catdir"
-"$ruby" -rtmpdir "$here/compile.rb" "$certname" "$method" "$delay" "$catdir/$certname.json"
+"$ruby" "$here/compile.rb" "$certname" "class { 'profile::puppet_launchd': reload_method => '$method', reload_delay => $delay }" "$catdir/$certname.json"
 
 echo "== stock plist, before:"
 /usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables' "$plist"

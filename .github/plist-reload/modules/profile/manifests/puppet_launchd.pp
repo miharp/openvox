@@ -39,7 +39,8 @@ class profile::puppet_launchd (
       mode    => '0644',
       content => epp('profile/puppet-reload.plist.epp', {
         'label' => $helper_label,
-        'plist' => $plist,
+        'target_label' => 'puppet',
+        'target_plist' => $plist,
         'delay' => $reload_delay,
       }),
     }

@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   reload:
-    name: ${{ matrix.os }} / ${{ matrix.method }}
+    name: ${{ matrix.os }} / ${{ matrix.test }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -23,9 +23,11 @@ jobs:
         os:
           - macos-15
           - macos-26
-        method:
-          - inline
-          - helper
+        test:
+          - daemon-inline
+          - daemon-helper
+          - scheduled-inline
+          - scheduled-helper
     steps:
       - uses: actions/checkout@v4
 
@@ -44,14 +46,20 @@ jobs:
       - name: Reload test
         run: |
           sw_vers -productVersion
-          sudo bash .github/plist-reload/run_test.sh ${{ matrix.method }} 60 180 2>&1 | tee result.txt
+          method=${TEST#*-}
+          case "$TEST" in
+            daemon-*) sudo bash .github/plist-reload/run_test.sh "$method" 60 180 2>&1 | tee result.txt ;;
+            scheduled-*) sudo bash .github/plist-reload/run_scheduled.sh "$method" 60 150 270 2>&1 | tee result.txt ;;
+          esac
+        env:
+          TEST: ${{ matrix.test }}
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "### ${{ matrix.os }} ($(sw_vers -productVersion)) / ${{ matrix.method }}"
+            echo "### ${{ matrix.os }} ($(sw_vers -productVersion)) / ${{ matrix.test }}"
             echo '```'
-            grep -E '^(RESULT|== t=0|   t=)' result.txt
+            grep -E '^(RESULT|==|   )' result.txt | grep -v '^== (puppet|launchctl)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,8 +1,8 @@
-<%- | String $label, String $plist, Integer $delay | -%>
+<%- | String $label, String $target_label, String $target_plist, Integer $delay | -%>
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Managed by Puppet (profile::puppet_launchd). One-shot job that reloads
-     the agent's launchd job from outside the agent's process group. -->
+     a launchd job from outside the agent's process group. -->
 <plist version="1.0">
 <dict>
         <key>Label</key>
@@ -15,9 +15,9 @@
                      fails with "5: Input/output error" until the old job is
                      gone, so wait for it and retry. -->
                 <string>sleep <%= $delay %>
-/bin/launchctl bootout system/puppet
-for i in $(seq 60); do /bin/launchctl print system/puppet 1&gt;/dev/null 2&gt;&amp;1 || break; sleep 1; done
-for i in $(seq 10); do /bin/launchctl bootstrap system <%= $plist %> &amp;&amp; break; sleep 3; done
+/bin/launchctl bootout system/<%= $target_label %>
+for i in $(seq 60); do /bin/launchctl print system/<%= $target_label %> 1&gt;/dev/null 2&gt;&amp;1 || break; sleep 1; done
+for i in $(seq 10); do /bin/launchctl bootstrap system <%= $target_plist %> &amp;&amp; break; sleep 3; done
 /bin/launchctl bootout system/<%= $label %></string>
         </array>
         <key>RunAtLoad</key>
