@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install ruby version ${{ matrix.cfg.ruby }}
-        uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
         with:
           ruby-version: ${{ matrix.cfg.ruby }}
           bundler-cache: true
@@ -79,6 +79,9 @@ jobs:
           - {os: ubuntu-24.04, ruby: 'jruby-10.1'}
           - {os: windows-2025, ruby: '3.2'}
           - {os: windows-2025, ruby: '4.0'}
+          - {os: macos-15, ruby: '3.2'}
+          - {os: macos-26, ruby: '3.2'}
+          - {os: macos-26, ruby: '4.0'}
 
     runs-on: ${{ matrix.cfg.os }}
     steps:
@@ -86,7 +89,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install ruby version ${{ matrix.cfg.ruby }}
-        uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
         with:
           ruby-version: ${{ matrix.cfg.ruby }}
           bundler-cache: true
@@ -127,6 +130,15 @@ jobs:
           # larger groups).
           bundle exec rake parallel:spec
 
+      - name: Run tests on macOS
+        if: runner.os == 'macOS'
+        run: |
+          # debug information
+          sw_vers
+          ruby -ropenssl -e 'puts "OpenSSL Version - #{OpenSSL::OPENSSL_VERSION}"; puts "OpenSSL Library Version - #{OpenSSL::OPENSSL_LIBRARY_VERSION}"'
+
+          bundle exec rake parallel:spec
+
       - name: Run tests on Linux
         if: runner.os == 'Linux'
         run: |
@@ -163,7 +175,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install Ruby version 3.3
-        uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
         with:
           ruby-version: 3.3
           bundler-cache: true
@@ -182,7 +194,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Ruby
-        uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
         with:
           ruby-version: ruby
           bundler-cache: true
@@ -239,7 +251,7 @@ jobs:
           echo "file=$gem_file" >> "$GITHUB_OUTPUT"
 
       - name: Install Ruby
-        uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
         with:
           ruby-version: ruby
           bundler-cache: true
